@@ -1,0 +1,47 @@
+K 25
+svn:wc:ra_dav:version-url
+V 50
+/svn/!svn/ver/423/trunk/ros-pkg/find_object_2d/src
+END
+FindObjectROS.h
+K 25
+svn:wc:ra_dav:version-url
+V 66
+/svn/!svn/ver/384/trunk/ros-pkg/find_object_2d/src/FindObjectROS.h
+END
+find_object_2d_node.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 74
+/svn/!svn/ver/423/trunk/ros-pkg/find_object_2d/src/find_object_2d_node.cpp
+END
+CameraROS.h
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/svn/!svn/ver/384/trunk/ros-pkg/find_object_2d/src/CameraROS.h
+END
+tf_example_node.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 70
+/svn/!svn/ver/384/trunk/ros-pkg/find_object_2d/src/tf_example_node.cpp
+END
+print_objects_detected_node.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 82
+/svn/!svn/ver/384/trunk/ros-pkg/find_object_2d/src/print_objects_detected_node.cpp
+END
+FindObjectROS.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/svn/!svn/ver/384/trunk/ros-pkg/find_object_2d/src/FindObjectROS.cpp
+END
+CameraROS.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 64
+/svn/!svn/ver/384/trunk/ros-pkg/find_object_2d/src/CameraROS.cpp
+END

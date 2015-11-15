@@ -1,0 +1,23 @@
+K 25
+svn:wc:ra_dav:version-url
+V 53
+/svn/!svn/ver/373/trunk/ros-pkg/find_object_2d/launch
+END
+find_object_2d.launch
+K 25
+svn:wc:ra_dav:version-url
+V 75
+/svn/!svn/ver/350/trunk/ros-pkg/find_object_2d/launch/find_object_2d.launch
+END
+find_object_3d.launch
+K 25
+svn:wc:ra_dav:version-url
+V 75
+/svn/!svn/ver/373/trunk/ros-pkg/find_object_2d/launch/find_object_3d.launch
+END
+find_object_2d_gui.launch
+K 25
+svn:wc:ra_dav:version-url
+V 79
+/svn/!svn/ver/350/trunk/ros-pkg/find_object_2d/launch/find_object_2d_gui.launch
+END

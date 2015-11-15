@@ -1,0 +1,473 @@
+/*
+// This file is part of RPG-YTC- the RPG youBot Torque Controller
+//
+// RPG-YTC is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// RPG-YTC is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with RPG-YTC.  If not, see <http://www.gnu.org/licenses/>.
+
+ * ltr.cpp
+ *
+ *  Created on: Sep 11, 2013
+ *      Author: keiserb
+ */
+
+#include "ros/ros.h"
+#include "trajectory_generator/CStoCS.h"
+#include "trajectory_generator/Circle.h"
+#include "trajectory_msgs/JointTrajectoryPoint.h"
+#include "Eigen/Dense"
+#include <Eigen/Geometry> //prj15
+#include <brics_actuator/JointPositions.h>
+#include <brics_actuator/JointVelocities.h>
+#include <geometry_msgs/Pose.h>
+#include <iostream>
+#include <boost/units/systems/si.hpp>
+#include <torque_control/torque_trajectoryAction.h>
+#include <torque_control/step.h>
+#include <actionlib/client/simple_action_client.h>
+#include "rpg_youbot_common/rpg_youbot_common.h"
+
+using namespace std;
+int main(int argc, char **argv)
+{
+  ros::init(argc, argv, "traj_tester");
+  ros::NodeHandle nh;
+  ros::Rate lr(10);
+  ros::ServiceClient cs2cs_client = nh.serviceClient<trajectory_generator::CStoCS > ("From_CS_to_CS");
+  ros::Publisher arm_pub_pos = nh.advertise<brics_actuator::JointPositions > ("/arm_1/arm_controller/position_command", 1);
+//  ros::Publisher gripper_pub_pos = nh.advertise<brics_actuator::JointPositions > ("arm_1/gripper_controller/position_command", 1);
+
+  //prj begin
+#define USE_MULTI_TRAJ
+#define INIT_POSn
+#define USE_GRIPPER
+
+#ifdef USE_GRIPPER
+  ros::Publisher gripper_pub_pos;
+  gripper_pub_pos = nh.advertise<brics_actuator::JointPositions > ("arm_1/gripper_controller/position_command", 1);
+
+  brics_actuator::JointPositions command;
+  vector <brics_actuator::JointValue> gripperJointPositions;
+
+  static const int numberOfGripperJoints = 2;
+  gripperJointPositions.resize(numberOfGripperJoints);
+#endif
+  //prj end
+
+  actionlib::SimpleActionClient<torque_control::torque_trajectoryAction> ac("torque_control", true);
+
+  double max_vel = 0.02; // 0.05
+  double max_acc = 0.2; // 0.5
+  ROS_INFO("max_vel: %f \t max_acc :%f", max_vel, max_acc);
+  double first_pt[5];
+  bool feasible = true; // false
+  trajectory_msgs::JointTrajectory traj_begin, traj_down, traj_up, traj_home, traj, temp;
+  trajectory_msgs::JointTrajectoryPoint point;
+  geometry_msgs::Pose init_p, start_p, low_p, end_p;
+  trajectory_generator::CStoCS cs2cs;
+
+#ifdef INIT_POS
+
+  init_p.position.x = 0.1898;
+  init_p.position.y = -0.040;
+  init_p.position.z = 0.65; //0.3891
+  Eigen::Quaterniond grip_init(-0.1295, 0.1313, -0.7980, 0.5737);
+  init_p.orientation.x = grip_init.x();
+  init_p.orientation.y = grip_init.y();
+  init_p.orientation.z = grip_init.z();
+  init_p.orientation.w = grip_init.w();
+#endif
+
+//// ROLL PITCH YAW -> QUATERNION: begin
+
+  double roll, pitch, yaw;
+
+roll  = 0. * M_PI / 180.;//0.*M_PI; // +90deg
+pitch = -151.354931 * M_PI / 180.;//-0.833*M_PI; // -90 deg
+yaw   = -89.994501  * M_PI / 180.;//-0.5*M_PI; // -60 deg
+
+Eigen::AngleAxisd rollAngle(roll, Eigen::Vector3d::UnitZ());
+Eigen::AngleAxisd yawAngle(yaw, Eigen::Vector3d::UnitY());
+Eigen::AngleAxisd pitchAngle(pitch, Eigen::Vector3d::UnitX());
+
+Eigen::Quaternion<double> q = rollAngle * yawAngle * pitchAngle;
+
+/**/
+q.x() = -(float)((int) round(q.x()*10000))/10000;
+q.y() = -(float)((int) round(q.y()*10000))/10000;
+q.z() = -(float)((int) round(q.z()*10000))/10000;
+q.w() = -(float)((int) round(q.w()*10000))/10000;
+/**/
+
+printf("\nRPY to Quat\n");
+printf("angles: roll=%f  pitch=%f  yaw=%f\n",roll, pitch, yaw);
+printf("rotation: x=%f  y=%f  z=%f  w=%f\n",q.x(), q.y(), q.z(), q.w());
+  //request.des_normal[0] = cos(yaw) * sin(pitch) * sin(roll) - sin(yaw) * cos(roll);
+  //request.des_normal[1] = sin(yaw) * sin(pitch) * sin(roll) + cos(yaw) * cos(roll);
+  //request.des_normal[2] = cos(pitch) * sin(roll);
+
+
+
+  double ro,pi,ya;
+  double q0=0.6851, q1=0.1749, q2=0.6851, q3=-0.1749;
+
+//Vector3f ea = mat.eulerAngles(2, 0, 2); 
+
+//  ro = atan2(2 * q1 * q2 - 2 * q0 * q3, 2 * q0*q0 + 2 * q1 * q1 - 1) * 180/M_PI; // psi
+//  ya = -asin(2 * q1 * q3 + 2 * q0 * q2) * 180/M_PI; // theta
+//  pi = atan2(2 * q2 * q3 - 2 * q0 * q1, 2 * q0 * q0 + 2 * q3 * q3 - 1) * 180/M_PI; // phi
+
+ya = atan2(2*q1*q3 - 2*q0*q2, 1 - 2*q1*q1 - 2*q2*q2) * 180/M_PI;
+pi = atan2(2*q0*q3 - 2*q1*q2, 1 - 2*q0*q0 - 2*q2*q2) * 180/M_PI;
+ro = asin (2*q0*q1 + 2*q2*q3) * 180/M_PI;
+
+//ro = -atan2(2*q1*q3 + 2*q0*q3, -q3*q3 + q0*q0 + q1*q1 - q2*q2) * 180/M_PI;
+//ya =  atan2(2*q0*q3 + 2*q2*q3, q3*q3 + q0*q0 - q1*q1 - q2*q2) * 180/M_PI;
+//pi = -asin (2*q1*q3 - 2*q0*q2) * 180/M_PI;
+
+printf("\nQuat to RPY\n");
+printf("angles: roll=%f  pitch=%f  yaw=%f\n",ro, pi, ya);
+printf("rotation: x=%f  y=%f  z=%f  w=%f\n",q0, q1, q2, q3);
+//    ro = cos(yaw) * sin(pitch) * sin(roll) - sin(yaw) * cos(roll);
+//    pi = sin(yaw) * sin(pitch) * sin(roll) + cos(yaw) * cos(roll);
+//    ya = cos(pitch) * sin(roll);
+
+//// NORMALIZED -> REAL ANGLES CONVERSION: ROLL, PITCH AND YAW: end
+
+  start_p.position.x = 0.12; //0.12
+  start_p.position.y = 0.25; //0.25
+  start_p.position.z = 0.0; // 0.00
+  Eigen::Quaterniond grip = q;
+//  Eigen::Quaterniond grip(0.6851, 0.1749, 0.6851, -0.1749);
+//  Eigen::Quaterniond grip(0.6851, 0.1749, 0.6851, -0.1749);
+  start_p.orientation.x = grip.x();
+  start_p.orientation.y = grip.y();
+  start_p.orientation.z = grip.z();
+  start_p.orientation.w = grip.w();
+
+  low_p.position.x = 0.05; //0.05
+  low_p.position.y = 0.25; //0.25
+  low_p.position.z = -0.1; // -0.1
+  low_p.orientation = start_p.orientation;
+
+#ifdef USE_ENDPOS
+  end_p.position.x = 0.12; //-0.12
+  end_p.position.y = 0.25; //0.25
+  end_p.position.z = 0.0; // 0.00
+  end_p.orientation = start_p.orientation;
+#endif
+
+#ifdef INIT_POS
+
+  cs2cs.request.start_pos = init_p;
+  cs2cs.request.end_pos = start_p;
+  cs2cs.request.start_vel = 0.0;
+  cs2cs.request.end_vel = max_vel;
+  cs2cs.request.max_vel = max_vel;
+  cs2cs.request.max_acc = max_acc;
+
+  if (cs2cs_client.call(cs2cs))
+  {
+    if (cs2cs.response.feasible)
+    {
+      cout << "movement to pickup feasible" << endl;
+      temp = cs2cs.response.trajectory;
+      while (!temp.points.empty())
+      {
+        point = temp.points.back();
+        temp.points.pop_back();
+#ifdef USE_MULTI_TRAJ
+        traj_begin.points.insert(traj_begin.points.begin(), point);
+      }
+      traj_begin.joint_names = temp.joint_names;
+#else
+        traj.points.insert(traj.points.begin(), point);
+      }
+      traj.joint_names = temp.joint_names;
+#endif
+    }
+    else
+    {
+      cout << "movement to pickup NOT feasible!" << endl;
+      feasible = false;
+    }
+  }
+  else
+  {
+    ROS_ERROR("Could not call service.");
+    return 1;
+  }
+
+#endif
+
+  cs2cs.request.start_pos = start_p;
+  cs2cs.request.end_pos = low_p;
+  cs2cs.request.start_vel = 0.0;
+  cs2cs.request.end_vel = max_vel;
+  cs2cs.request.max_vel = max_vel;
+  cs2cs.request.max_acc = max_acc;
+
+  if (cs2cs_client.call(cs2cs))
+  {
+    if (cs2cs.response.feasible)
+    {
+      cout << "Downwards movement feasible" << endl;
+      temp = cs2cs.response.trajectory;
+      while (!temp.points.empty())
+      {
+        point = temp.points.back();
+        temp.points.pop_back();
+#ifdef USE_MULTI_TRAJ
+        traj_down.points.insert(traj_down.points.begin(), point);
+      }
+      traj_down.joint_names = temp.joint_names;
+#else
+        traj.points.insert(traj.points.begin(), point);
+      }
+      traj.joint_names = temp.joint_names;
+#endif
+    }
+    else
+    {
+      cout << "Downwards movement NOT feasible!" << endl;
+      feasible = false;
+    }
+  }
+  else
+  {
+    ROS_ERROR("Could not call service.");
+    return 1;
+  }
+
+
+
+  cs2cs.request.start_pos = low_p;
+  cs2cs.request.end_pos = start_p;
+  cs2cs.request.start_vel = max_vel;
+  cs2cs.request.end_vel = 0.0;
+  cs2cs.request.max_vel = max_vel;
+  cs2cs.request.max_acc = max_acc;
+
+  if (cs2cs_client.call(cs2cs))
+  {
+    if (cs2cs.response.feasible)
+    {
+      cout << "Upwards movement feasible" << endl;
+      temp = cs2cs.response.trajectory;
+      while (!temp.points.empty())
+      {
+        point = temp.points.back();
+        temp.points.pop_back();
+#ifdef USE_MULTI_TRAJ
+        traj_up.points.insert(traj_up.points.begin(), point);
+      }
+      traj_up.joint_names = temp.joint_names;
+#else
+        traj.points.insert(traj.points.begin(), point);
+      }
+      traj.joint_names = temp.joint_names;
+#endif
+    }
+    else
+    {
+      cout << "Upwards movement NOT feasible" << endl;
+      feasible = false;
+    }
+  }
+  else
+  {
+    ROS_ERROR("Could not call service.");
+    return 1;
+  }
+
+#ifdef INIT_POS
+
+  cs2cs.request.start_pos = start_p;
+  cs2cs.request.end_pos = init_p;
+  cs2cs.request.start_vel = max_vel;
+  cs2cs.request.end_vel = 0.0;
+  cs2cs.request.max_vel = max_vel;
+  cs2cs.request.max_acc = max_acc;
+
+  if (cs2cs_client.call(cs2cs))
+  {
+    if (cs2cs.response.feasible)
+    {
+      cout << "movement to home feasible" << endl;
+      temp = cs2cs.response.trajectory;
+      while (!temp.points.empty())
+      {
+        point = temp.points.back();
+        temp.points.pop_back();
+#ifdef USE_MULTI_TRAJ
+        traj_home.points.insert(traj_home.points.begin(), point);
+      }
+      traj_home.joint_names = temp.joint_names;
+#else
+        traj.points.insert(traj.points.begin(), point);
+      }
+      traj.joint_names = temp.joint_names;
+#endif
+    }
+    else
+    {
+      cout << "movement to home NOT feasible" << endl;
+      feasible = false;
+    }
+  }
+  else
+  {
+    ROS_ERROR("Could not call service.");
+    return 1;
+  }
+
+#endif
+
+
+///////////////////////////
+  if (feasible)
+  {
+    point = traj_down.points.back();
+    int i = 0;
+    while (!point.positions.empty())
+    {
+      first_pt[i] = point.positions.back();
+      i++;
+      point.positions.pop_back();
+    }
+    cout << "Publishing arm cmd" << endl;
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(first_pt));
+    ros::spinOnce();
+    sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(first_pt));
+    ros::spinOnce();
+    sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(first_pt));
+    ros::spinOnce();
+    sleep(1);
+
+    ROS_INFO("READY FOR PICK UP ACTION?");
+    int x;
+    cin >> x;
+    ac.waitForServer(); //will wait for infinite time
+    ROS_INFO("Action server started, sending goal.");
+
+    // prj begin
+    bool finished_before_timeout;
+    torque_control::torque_trajectoryGoal goal;
+#ifdef USE_GRIPPER
+    gripperJointPositions[0].joint_uri = "gripper_finger_joint_l";
+    gripperJointPositions[1].joint_uri = "gripper_finger_joint_r";
+    gripperJointPositions[0].unit = boost::units::to_string(boost::units::si::meter);
+    gripperJointPositions[1].unit = boost::units::to_string(boost::units::si::meter);
+    float gripper_position = 0.0; // in meters - max val: 0.022 - min val: 0.0
+#endif
+
+#ifdef INIT_POS
+
+    //// move to pickup
+
+    goal.trajectory = traj_begin;
+    ac.sendGoal(goal);
+//    sleep(5);
+
+#endif
+
+//gripper_pub_pos.publish(rpg_youbot_common::generateGripperPositionMsg(0.01,0.01));
+//sleep(3);
+
+#ifdef USE_GRIPPER
+    //// Gripper open
+
+    gripper_position = 0.022; // in meters - max val: 0.022 - min val: 0.0
+    gripperJointPositions[0].value = gripper_position/2;
+    gripperJointPositions[1].value = gripper_position/2;
+
+    command.positions = gripperJointPositions;
+    gripper_pub_pos.publish(command);
+
+    sleep(3); // in seconds
+
+#endif
+    //// move down
+
+#ifdef USE_MULTI_TRAJ
+    goal.trajectory = traj_down;
+#else
+    goal.trajectory = traj;
+#endif
+    ac.sendGoal(goal);
+
+
+//    gripper_pub_pos.publish(rpg_youbot_common::generateGripperPositionMsg(0.005,0.005));
+//sleep(3);
+
+    //wait for the action to return
+    finished_before_timeout = ac.waitForResult(ros::Duration(20.0));
+
+//    ROS_INFO("Pick now?");
+//    cin >> x;
+//    ac.waitForServer(); //will wait for infinite time
+
+
+#ifdef USE_GRIPPER
+    //// Gripper close
+    sleep(2); // in seconds
+
+    gripper_position = 0.01; // in meters - max val: 0.022 - min val: 0.0
+    gripperJointPositions[0].value = gripper_position/2;
+    gripperJointPositions[1].value = gripper_position/2;
+
+    command.positions = gripperJointPositions;
+    gripper_pub_pos.publish(command);
+
+    sleep(3); // in seconds
+
+#endif
+    //// move up
+
+#ifdef USE_MULTI_TRAJ
+    goal.trajectory = traj_up;
+    ac.sendGoal(goal);
+#endif
+
+    //// move to pickup
+#ifdef INIT_POS
+
+
+#ifdef USE_MULTI_TRAJ
+    goal.trajectory = traj_home;
+    ac.sendGoal(goal);
+#endif
+
+//    sleep(5);
+#endif
+    // prj end
+
+
+    //wait for the action to return
+    finished_before_timeout = ac.waitForResult(ros::Duration(60.0));
+
+    if (finished_before_timeout)
+    {
+      actionlib::SimpleClientGoalState state = ac.getState();
+      ROS_INFO("Action finished: %s", state.toString().c_str());
+    }
+    else
+    {
+      ROS_INFO("Action did not finish before the time out.");
+    }
+  }
+
+  return 0;
+}
+

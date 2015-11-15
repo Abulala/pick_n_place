@@ -1,0 +1,784 @@
+/*
+// This file is part of RPG-YTC- the RPG youBot Torque Controller
+//
+// RPG-YTC is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// RPG-YTC is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with RPG-YTC.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#include "ros/ros.h"
+#include "trajectory_generator/CStoCS.h"
+#include "trajectory_generator/Circle.h"
+#include "trajectory_msgs/JointTrajectoryPoint.h"
+#include "Eigen/Dense"
+#include <Eigen/Geometry> //prj15
+#include <brics_actuator/JointPositions.h>
+#include <brics_actuator/JointVelocities.h>
+#include <geometry_msgs/Pose.h>
+#include <iostream>
+#include <boost/units/systems/si.hpp>
+#include <torque_control/torque_trajectoryAction.h>
+#include "ik_solver_service/SolveClosestIK.h"
+#include "ik_solver_service/SolveFullyConstrainedIK.h"
+#include "ik_solver_service/SolvePreferredTypeIK.h"
+#include <torque_control/step.h>
+#include <actionlib/client/simple_action_client.h>
+#include "rpg_youbot_common/rpg_youbot_common.h"
+
+#define USE_MULTI_TRAJ
+#define USE_GRIPPER
+#define PICK_FROM_TOP
+#define CAM_ACTIVE
+
+#ifdef CAM_ACTIVE
+
+  #include <tf/transform_listener.h>
+  #include <find_object_2d/ObjectsStamped.h>
+  #include <QtCore/QString>
+
+#endif
+
+
+////// Coordinates of the robot:
+ /// http://www.youbot-store.com/wiki/images/2/2b/YoubotCoordinates.png
+
+/// youbot axis limits
+ /// http://www.youbot-store.com/wiki/images/thumb/5/5f/KUKA_youBot_Arm_Dimensions.jpg/800px-KUKA_youBot_Arm_Dimensions.jpg
+
+using namespace std;
+
+
+Eigen::Quaternion<double> RPY2Quat(double roll, double pitch, double yaw){
+  Eigen::AngleAxisd rollAngle(roll, Eigen::Vector3d::UnitZ());
+  Eigen::AngleAxisd yawAngle(yaw, Eigen::Vector3d::UnitY());
+  Eigen::AngleAxisd pitchAngle(pitch, Eigen::Vector3d::UnitX());
+
+  return rollAngle * yawAngle * pitchAngle;
+
+}
+
+// source: http://www.tinkerforge.com/en/doc/Software/Bricks/IMU_Brick_CSharp.html
+//////////////Quat to euler angles!!
+
+double Quat2Xangle(Eigen::Quaternion<double> q){
+ // this is xAngle
+  return atan2(2*q.y()*q.w() - 2*q.x()*q.z(), 1 - 2*q.y()*q.y() - 2*q.z()*q.z()) * 180/M_PI;
+}
+double Quat2Yangle(Eigen::Quaternion<double> q){
+ // this is yAngle
+  return atan2(2*q.x()*q.w() - 2*q.y()*q.z(), 1 - 2*q.x()*q.x() - 2*q.z()*q.z()) * 180/M_PI;
+}
+double Quat2Zangle(Eigen::Quaternion<double> q){
+ // this is zAngle
+  return asin (2*q.x()*q.y() + 2*q.z()*q.w()) * 180/M_PI;
+}
+
+////////////////Quat to RPY!!
+
+double Quat2yaw(Eigen::Quaternion<double> q){
+  // yaw = gieren
+  // rotation around y axis
+  return atan2(2*q.x()*q.y() + 2*q.w()*q.z(), q.w()*q.w() + q.x()*q.x() - q.y()*q.y() - q.z()*q.z()) * 180/M_PI;
+}
+double Quat2pitch(Eigen::Quaternion<double> q){
+  // pitch = neigen
+  // rotation around x axis
+  return -asin (2*q.w()*q.y() - 2*q.x()*q.z()) * 180/M_PI;
+}
+double Quat2roll(Eigen::Quaternion<double> q){
+  // roll = rollen
+  // rotation around z axis
+  return -atan2(2*q.y()*q.z() + 2*q.w()*q.x(), -q.w()*q.w() + q.x()*q.x() + q.y()*q.y() - q.z()*q.z()) * 180/M_PI;
+}
+
+  //request.des_normal[0] = cos(yaw) * sin(pitch) * sin(roll) - sin(yaw) * cos(roll);
+  //request.des_normal[1] = sin(yaw) * sin(pitch) * sin(roll) + cos(yaw) * cos(roll);
+  //request.des_normal[2] = cos(pitch) * sin(roll);
+
+
+//  ro = atan2(2 * q1 * q2 - 2 * q0 * q3, 2 * q0*q0 + 2 * q1 * q1 - 1) * 180/M_PI; // psi
+//  ya = -asin(2 * q1 * q3 + 2 * q0 * q2) * 180/M_PI; // theta
+//  pi = atan2(2 * q2 * q3 - 2 * q0 * q1, 2 * q0 * q0 + 2 * q3 * q3 - 1) * 180/M_PI; // phi
+
+
+//ro = -atan2(2*q1*q3 + 2*q0*q3, -q3*q3 + q0*q0 + q1*q1 - q2*q2) * 180/M_PI;
+//ya =  atan2(2*q0*q3 + 2*q2*q3, q3*q3 + q0*q0 - q1*q1 - q2*q2) * 180/M_PI;
+//pi = -asin (2*q1*q3 - 2*q0*q2) * 180/M_PI;
+
+////////////////////////////////////////////////
+
+bool wait4enterkey(string echo_str){
+    cout << echo_str << endl;
+    //cout << "PRESS ENTER KEY TO EXECUTE PICK UP PROCESS.";
+    if(cin.get() == '\n'){
+    	return true;
+    }else{
+    	//cout << "YOU HIT A RANDOM KEY -> EXITING PROGRAM.";
+    	return false;
+    }
+}
+
+
+#ifdef CAM_ACTIVE
+bool object_detected = false;
+float objectQuat[7]; // 7:  pos_x, pos_y, pos_z, orient_x, orient_y, orient_z, orient_w
+//int count = 0;
+
+
+class TfExample
+{
+public:
+	TfExample() :
+		mapFrameId_("/map"),
+		objFramePrefix_("object")
+	{
+//ros::spinOnce();
+		ros::NodeHandle pnh("~");
+		pnh.param("map_frame_id", mapFrameId_, mapFrameId_);
+		pnh.param("object_prefix", objFramePrefix_, objFramePrefix_);
+
+		ros::NodeHandle nh;
+		subs_ = nh.subscribe("objectsStamped", 1, &TfExample::objectsDetectedCallback, this);
+	}
+
+	void objectsDetectedCallback(const find_object_2d::ObjectsStampedConstPtr & msg)
+	{
+		if(msg->objects.data.size())
+		{
+			for(unsigned int i=0; i<msg->objects.data.size(); i+=12)
+			{
+				// get data
+				int id = (int)msg->objects.data[i];
+				std::string objectFrameId = QString("%1_%2").arg(objFramePrefix_.c_str()).arg(id).toStdString(); // "object_1", "object_2"
+
+				tf::StampedTransform pose;
+//				tf::StampedTransform poseCam;
+				try
+				{
+					// Get transformation from "object_#" frame to target frame "map"
+					// The timestamp matches the one sent over TF
+					tfListener_.lookupTransform(mapFrameId_, objectFrameId, msg->header.stamp, pose);
+//					tfListener_.lookupTransform(msg->header.frame_id, objectFrameId, msg->header.stamp, poseCam);
+				}
+				catch(tf::TransformException & ex)
+				{
+//					ROS_WARN("%s",ex.what());
+					continue;
+				}
+
+				// Here "pose" is the position of the object "id" in "/map" frame.
+/*				ROS_INFO("Object_%d [x,y,z] [x,y,z,w] in \"%s\" frame: [%f,%f,%f] [%f,%f,%f,%f]",
+						id, mapFrameId_.c_str(),
+						pose.getOrigin().x(), pose.getOrigin().y(), pose.getOrigin().z(),
+						pose.getRotation().x(), pose.getRotation().y(), pose.getRotation().z(), pose.getRotation().w());
+				ROS_INFO("Object_%d [x,y,z] [x,y,z,w] in \"%s\" frame: [%f,%f,%f] [%f,%f,%f,%f]",
+						id, msg->header.frame_id.c_str(),
+						poseCam.getOrigin().x(), poseCam.getOrigin().y(), poseCam.getOrigin().z(),
+						poseCam.getRotation().x(), poseCam.getRotation().y(), poseCam.getRotation().z(), poseCam.getRotation().w());
+*/
+objectQuat[0] = pose.getOrigin().x();
+objectQuat[1] = pose.getOrigin().y();
+objectQuat[2] = pose.getOrigin().z();
+objectQuat[3] = pose.getRotation().x();
+objectQuat[4] = pose.getRotation().y();
+objectQuat[5] = pose.getRotation().z();
+objectQuat[6] = pose.getRotation().w();
+
+//count++;
+object_detected = true;
+ROS_INFO("OBJECT DETECTED: position[%.2f, %.2f, %.2f] orientation[%.4f, %.4f, %.4f, %.4f]", objectQuat[0], objectQuat[1], objectQuat[2], objectQuat[3], objectQuat[4], objectQuat[5], objectQuat[6]);
+//printf("OBJECT DETECTED: position[%.2f, %.2f, %.2f] orientation[%.4f, %.4f, %.4f, %.4f]", objectQuat[0], objectQuat[1], objectQuat[2], objectQuat[3], objectQuat[4], objectQuat[5], objectQuat[6]);
+
+//ros::shutdown();
+//break;
+
+
+			}
+		}
+	}
+
+private:
+	std::string mapFrameId_;
+	std::string objFramePrefix_;
+    ros::Subscriber subs_;
+    tf::TransformListener tfListener_;
+
+};
+
+#endif
+
+int main(int argc, char **argv)
+{
+  ros::init(argc, argv, "prj15_node");
+#ifdef CAM_ACTIVE
+  TfExample sync;
+  while(!object_detected) { ros::spinOnce(); }
+#endif
+  ros::NodeHandle nh;
+
+  ros::Rate lr(10);
+  ros::ServiceClient cs2cs_client = nh.serviceClient<trajectory_generator::CStoCS > ("From_CS_to_CS");
+  ros::Publisher arm_pub_pos = nh.advertise<brics_actuator::JointPositions > ("/arm_1/arm_controller/position_command", 1);
+  ros::Publisher gripper_pub_pos = nh.advertise<brics_actuator::JointPositions > ("arm_1/gripper_controller/position_command", 1);
+
+  //prj begin
+
+#ifdef USE_GRIPPER
+//  ros::Publisher gripper_pub_pos;
+//  gripper_pub_pos = nh.advertise<brics_actuator::JointPositions > ("arm_1/gripper_controller/position_command", 1);
+
+  brics_actuator::JointPositions command;
+  vector <brics_actuator::JointValue> gripperJointPositions;
+
+  static const int numberOfGripperJoints = 2;
+  gripperJointPositions.resize(numberOfGripperJoints);
+#endif
+  //prj end
+
+  actionlib::SimpleActionClient<torque_control::torque_trajectoryAction> ac("torque_control", true);
+
+  double roll, pitch, yaw;
+  double max_vel = 0.02; // 0.05
+  double max_acc = 0.2; // 0.5
+  ROS_INFO("max_vel: %.2f \t max_acc :%.2f", max_vel, max_acc);
+  double first_pt[5];
+  bool feasible = true; // false
+  trajectory_msgs::JointTrajectory traj_begin, traj_down, traj_up, traj_home, traj, temp;
+  trajectory_msgs::JointTrajectoryPoint point;
+  geometry_msgs::Pose init_p, start_p, low_p, end_p, home_p, plate_p, straight_p;
+  trajectory_generator::CStoCS cs2cs;
+
+  // joint positions: 0.0204 0.0609 -0.1547 0.2797 1.4708
+  double home_joints[5] = {0.0204, 0.0609, -0.1547, 0.2797, 1.4708};
+  home_p.position.x = 0.0; // orig in base_link frame: 0.166
+  home_p.position.y = 0.0; // orig in base_link frame: 0.000
+  home_p.position.z = 0.48; // orig in base_link frame: 0.396
+  Eigen::Quaterniond home_grip(-0.0643, 0.0694, -0.805, 0.5857); // RPY[ -0.1881 -0.0222 -1.8814 ]
+  home_p.orientation.x = home_grip.x();
+  home_p.orientation.y = home_grip.y();
+  home_p.orientation.z = home_grip.z();
+  home_p.orientation.w = home_grip.w();
+
+  // joint positions: 3.0 0.92 -2.6 1.7 3.0
+  double straight_joints[5] = {3.0, 0.92, -2.6, 1.7, 3.0};
+  straight_p.position.x = -0.15; // orig in base_link frame: 0.086
+  straight_p.position.y = 0.0; // orig in base_link frame: 0.0027
+  straight_p.position.z = 0.64; // orig in base_link frame: 0.5643
+  Eigen::Quaterniond straight_grip(0.0038, -0.1747, -0.0539, 0.9831); // RPY[ 0.028 -0.35 -0.115 ]
+  straight_p.orientation.x = straight_grip.x();
+  straight_p.orientation.y = straight_grip.y();
+  straight_p.orientation.z = straight_grip.z();
+  straight_p.orientation.w = straight_grip.w();
+
+  // joint positions: 3.0 0.8 -3.3 0.5 3.0
+  double plate_joints[5] = {3.0, 0.8, -3.3, 0.5, 3.0};
+  plate_p.position.x = -0.31; // orig in base_link frame: -0.62
+  plate_p.position.y = 0.0; // orig in base_link frame: 0.0075
+  plate_p.position.z = 0.19; // orig in base_link frame: 0.2782
+  Eigen::Quaterniond plate_grip(0.018, -0.921, -0.0205, 0.3886); // RPY[ 3.068 -0.7967 -3.071 ]
+  plate_p.orientation.x = plate_grip.x();
+  plate_p.orientation.y = plate_grip.y();
+  plate_p.orientation.z = plate_grip.z();
+  plate_p.orientation.w = plate_grip.w();
+
+
+
+
+
+
+  ros::ServiceClient solve_preferred_type_ik_client = nh.serviceClient<ik_solver_service::SolvePreferredTypeIK>("solve_preferred_type_ik");
+  ik_solver_service::SolvePreferredTypeIK pt_srv;
+  ik_solver_service::SolvePreferredTypeIK pt_srv_low;
+
+  pt_srv.request.arm_to_front = false;
+  pt_srv.request.arm_bended_up = false;
+  pt_srv.request.gripper_downwards = true;
+  pt_srv.request.des_position[0] = objectQuat[0]; //0.15
+  pt_srv.request.des_position[1] = objectQuat[1]; //0.25
+  pt_srv.request.des_position[2] = 0.015;
+  pt_srv.request.des_normal[0] = objectQuat[6]/M_PI*10; // rot
+  pt_srv.request.des_normal[1] = 1.0; // 1.0
+  pt_srv.request.des_normal[2] = 0.0; // 0.0
+
+  pt_srv_low.request.arm_to_front = false;
+  pt_srv_low.request.arm_bended_up = false;
+  pt_srv_low.request.gripper_downwards = true;
+  pt_srv_low.request.des_position[0] = objectQuat[0]; // objectQuat[0]
+  pt_srv_low.request.des_position[1] = objectQuat[1]; //objectQuat[1]
+  pt_srv_low.request.des_position[2] = -0.015;
+  pt_srv_low.request.des_normal[0] = objectQuat[6]/M_PI*10; // rot // 10.0 = 90deg
+  pt_srv_low.request.des_normal[1] = 1.0; // 1.0
+  pt_srv_low.request.des_normal[2] = 0.0; // 0.0
+
+
+  double desired_IK[5];
+  double desired_IK_low[5];
+  printf("\nstarting desired pos calc ...\n");
+
+  if (solve_preferred_type_ik_client.call(pt_srv))
+  {
+    for (int j = 0; j < 1; j++)
+    { // In case multiple solutions should be printed
+      for (int i = 0; i < 5; i++)
+      {
+        printf("%f\t", pt_srv.response.joint_angles[i]);
+        desired_IK[i] = pt_srv.response.joint_angles[i];
+      }
+      printf("\nfeasible: %d arm_to_front: %d arm_bended_up: %d gripper_downwards: %d\n\n", pt_srv.response.feasible,
+             pt_srv.response.arm_to_front, pt_srv.response.arm_bended_up, pt_srv.response.gripper_downwards);
+    }
+  }
+  else
+  {
+    ROS_ERROR("Failed to call service solve_preferred_type_ik");
+    return 1;
+  }
+
+  if (solve_preferred_type_ik_client.call(pt_srv_low))
+  {
+    for (int j = 0; j < 1; j++)
+    { // In case multiple solutions should be printed
+      for (int i = 0; i < 5; i++)
+      {
+        printf("%f\t", pt_srv_low.response.joint_angles[i]);
+        desired_IK_low[i] = pt_srv_low.response.joint_angles[i];
+      }
+      printf("\nfeasible: %d arm_to_front: %d arm_bended_up: %d gripper_downwards: %d\n\n", pt_srv_low.response.feasible,
+             pt_srv_low.response.arm_to_front, pt_srv_low.response.arm_bended_up, pt_srv_low.response.gripper_downwards);
+    }
+  }
+  else
+  {
+    ROS_ERROR("Failed to call service solve_preferred_type_ik");
+    return 1;
+  }
+
+
+
+
+
+
+
+#ifdef CAM_ACTIVE
+//  while(!object_detected){ sleep(1); /* WAIT UNTIL OBJECT IS DETECTED*/}
+
+
+
+
+//  start_p.position.x = objectQuat[0]; // arm should move the griffer 5 cm over the object
+//  start_p.position.y = objectQuat[1];
+//  start_p.position.z = 0.01;
+//  Eigen::Quaterniond grip(objectQuat[3], objectQuat[4], objectQuat[5], objectQuat[6]);
+
+  tf::Quaternion gripper_quat_pos;
+  double yaw_gripper = 0.0;
+  gripper_quat_pos.setRPY(0.0, -90.0/180.*M_PI, 0.0);
+  Eigen::Quaterniond grip(gripper_quat_pos.x(), gripper_quat_pos.y(), gripper_quat_pos.z(), gripper_quat_pos.w());
+
+/*
+  roll  = 90. * M_PI / 180.;
+  pitch = -180. * M_PI / 180.;
+  yaw   = -90.  * M_PI / 180.;
+
+  Eigen::Quaternion<double> q = RPY2Quat(roll, pitch, yaw);
+  Eigen::Quaterniond grip(q.x(), q.y(), q.z(), q.w());
+*/
+#else
+
+  printf("\n");
+  Eigen::Quaternion<double> tmp_quat(-0.6821, -0.0807, 0.7232, 0.0728);
+  printf("backwards side pick: XYZ angles[ %.4f %.4f %.4f ]\n", Quat2Xangle(tmp_quat), Quat2Yangle(tmp_quat), Quat2Zangle(tmp_quat) );
+  printf("backwards side pick: RPY       [ %.4f %.4f %.4f ]\n", Quat2roll(tmp_quat), Quat2pitch(tmp_quat), Quat2yaw(tmp_quat) );
+  Eigen::Quaternion<double> tmp_quat2(-0.4694, -0.5013, 0.5060, 0.5219);
+  printf("backwards side pick 90deg: XYZ angles[ %.4f %.4f %.4f ]\n", Quat2Xangle(tmp_quat2), Quat2Yangle(tmp_quat2), Quat2Zangle(tmp_quat2) );
+  printf("backwards side pick 90deg: RPY       [ %.4f %.4f %.4f ]\n", Quat2roll(tmp_quat2), Quat2pitch(tmp_quat2), Quat2yaw(tmp_quat2) );
+  Eigen::Quaternion<double> tmp_quat3(-0.0089, -0.6867, 0.7257, 0.0416);
+  printf("right side pick 90deg: XYZ angles[ %.4f %.4f %.4f ]\n", Quat2Xangle(tmp_quat3), Quat2Yangle(tmp_quat3), Quat2Zangle(tmp_quat3) );
+  printf("right side pick 90deg: RPY       [ %.4f %.4f %.4f ]\n", Quat2roll(tmp_quat3), Quat2pitch(tmp_quat3), Quat2yaw(tmp_quat3) );
+
+  double x_coord, y_coord, z_coord;
+
+#ifdef PICK_FROM_TOP
+  printf("\npick from top\n");
+  x_coord = 0.0; //0.0
+  y_coord = 0.25; //0.25
+  z_coord = 0.01; //0.0
+#else // Pick from side
+  printf("\npick from side\n");
+  x_coord = 0.0; //0.0
+  y_coord = 0.0; //0.25
+  z_coord = 0.60; //0.0
+#endif
+  /*
+  WORKS:
+  roll  = 0. * M_PI / 180.;
+  pitch = -150. * M_PI / 180.;
+  yaw   = -90.  * M_PI / 180.;
+  */
+
+  start_p.position.x = x_coord; //0.12
+  start_p.position.y = y_coord; //0.25
+  start_p.position.z = z_coord; // 0.00
+
+#ifdef PICK_FROM_TOP
+  roll  = 90. * M_PI / 180.;
+  pitch = -180. * M_PI / 180.;
+  yaw   = -90.  * M_PI / 180.;
+
+  Eigen::Quaternion<double> q = RPY2Quat(roll, pitch, yaw);
+  Eigen::Quaterniond grip(q.x(), q.y(), q.z(), q.w());
+#else
+  roll  = 90. * M_PI / 180.;
+  pitch = 90. * M_PI / 180.;
+  yaw   = 90.  * M_PI / 180.;
+
+  Eigen::Quaternion<double> q = RPY2Quat(roll, pitch, yaw);
+  Eigen::Quaterniond grip(q.x(), q.y(), q.z(), q.w());
+//  Eigen::Quaterniond grip(tmp_quat.x(), tmp_quat.y(), tmp_quat.z(), tmp_quat.w());
+
+#endif
+//  Eigen::Quaterniond grip(0.6851, 0.1749, 0.6851, -0.1749);
+//  Eigen::Quaterniond grip(0.6851, 0.1749, 0.6851, -0.1749);
+#endif
+  start_p.orientation.x = grip.x();
+  start_p.orientation.y = grip.y();
+  start_p.orientation.z = grip.z();
+  start_p.orientation.w = grip.w();
+
+#ifdef PICK_FROM_TOP
+  low_p.position.x = start_p.position.x; //0.05
+  low_p.position.y = start_p.position.y; //0.25
+  low_p.position.z = start_p.position.z-0.03; // -0.1
+#else
+  low_p.position.x = start_p.position.x; //0.05
+  low_p.position.y = start_p.position.y; //0.25
+  low_p.position.z = start_p.position.z+0.01; // -0.1
+#endif
+  low_p.orientation = start_p.orientation;
+
+
+  cs2cs.request.start_pos = start_p;
+  cs2cs.request.end_pos = low_p;
+  cs2cs.request.start_vel = 0.0;
+  cs2cs.request.end_vel = max_vel;
+  cs2cs.request.max_vel = max_vel;
+  cs2cs.request.max_acc = max_acc;
+
+  if (cs2cs_client.call(cs2cs))
+  {
+    if (cs2cs.response.feasible)
+    {
+      cout << "Downwards movement feasible" << endl;
+      temp = cs2cs.response.trajectory;
+      while (!temp.points.empty())
+      {
+        point = temp.points.back();
+        temp.points.pop_back();
+#ifdef USE_MULTI_TRAJ
+        traj_down.points.insert(traj_down.points.begin(), point);
+      }
+      traj_down.joint_names = temp.joint_names;
+#else
+        traj.points.insert(traj.points.begin(), point);
+      }
+      traj.joint_names = temp.joint_names;
+#endif
+    }
+    else
+    {
+      cout << "Downwards movement NOT feasible!" << endl;
+      feasible = false;
+    }
+  }
+  else
+  {
+    ROS_ERROR("Could not call service.");
+    return 1;
+  }
+
+
+
+  cs2cs.request.start_pos = low_p;
+  cs2cs.request.end_pos = start_p;
+  cs2cs.request.start_vel = max_vel;
+  cs2cs.request.end_vel = 0.0;
+  cs2cs.request.max_vel = max_vel;
+  cs2cs.request.max_acc = max_acc;
+
+  if (cs2cs_client.call(cs2cs))
+  {
+    if (cs2cs.response.feasible)
+    {
+      cout << "Upwards movement feasible" << endl;
+      temp = cs2cs.response.trajectory;
+      while (!temp.points.empty())
+      {
+        point = temp.points.back();
+        temp.points.pop_back();
+#ifdef USE_MULTI_TRAJ
+        traj_up.points.insert(traj_up.points.begin(), point);
+      }
+      traj_up.joint_names = temp.joint_names;
+#else
+        traj.points.insert(traj.points.begin(), point);
+      }
+      traj.joint_names = temp.joint_names;
+#endif
+    }
+    else
+    {
+      cout << "Upwards movement NOT feasible" << endl;
+      feasible = false;
+    }
+  }
+  else
+  {
+    ROS_ERROR("Could not call service.");
+    return 1;
+  }
+
+
+///////////////////////////
+  if (true)
+  {
+    // declarations
+    bool finished_before_timeout;
+    torque_control::torque_trajectoryGoal goal;
+#ifdef USE_GRIPPER
+    gripperJointPositions[0].joint_uri = "gripper_finger_joint_l";
+    gripperJointPositions[1].joint_uri = "gripper_finger_joint_r";
+    gripperJointPositions[0].unit = boost::units::to_string(boost::units::si::meter);
+    gripperJointPositions[1].unit = boost::units::to_string(boost::units::si::meter);
+    float gripper_position = 0.0; // in meters - max val: 0.022 - min val: 0.0
+#endif
+
+
+    /////////////// motion begin
+
+    if(!wait4enterkey("PRESS ENTER KEY TO EXECUTE MOVEMENT TO STRAIGHT.")) {cout << "YOU HIT A RANDOM KEY -> EXITING PROGRAM." << endl; return 1;}
+    
+    //// executing movement to obejct: begin
+//    point = traj_down.points.back();
+//    for(int i=0 ; !point.positions.empty() ; ) {
+//      first_pt[i] = point.positions.back(); i++; point.positions.pop_back();
+//    }
+    cout << "Publishing PTP command" << endl;
+
+
+    //// executing movement to straight: begin   
+    cout << "Publishing PTP command" << endl;
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(straight_joints)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(straight_joints)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(straight_joints)); ros::spinOnce(); sleep(1.0);
+    //// executing movement to straight: end
+
+    if(!wait4enterkey("PRESS ENTER KEY TO EXECUTE MOVEMENT TO OBJECT.")) {cout << "YOU HIT A RANDOM KEY -> EXITING PROGRAM."; return 1;}
+    
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(desired_IK)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(desired_IK)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(desired_IK)); ros::spinOnce(); sleep(1.0);
+//    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(first_pt)); ros::spinOnce(); sleep(0.5);
+//    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(first_pt)); ros::spinOnce(); sleep(0.5);
+//    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(first_pt)); ros::spinOnce(); sleep(1.0);
+    //// executing movement to obejct: end
+
+    //// waiting for input to continue
+    if(!wait4enterkey("PRESS ENTER KEY TO EXECUTE PICK UP PROCESS.")) {cout << "YOU HIT A RANDOM KEY -> EXITING PROGRAM." << endl; return 1;}
+/*
+    ac.waitForServer(); //will wait for infinite time
+*/
+    cout << "Publishing LIN movement - PICK UP" << endl;
+    // ROS_INFO("Publishing LIN movement");
+
+
+#ifdef USE_GRIPPER2
+  gripper_pub_pos.publish(rpg_youbot_common::generateGripperPositionMsg(0.011,0.011));
+  sleep(3);
+#endif
+
+#ifdef USE_GRIPPER
+    //// Gripper open
+
+    gripper_position = 0.022; // in meters - max val: 0.022 - min val: 0.0
+    gripperJointPositions[0].value = gripper_position/2;
+    gripperJointPositions[1].value = gripper_position/2;
+
+    command.positions = gripperJointPositions;
+    gripper_pub_pos.publish(command);
+
+    sleep(3); // in seconds
+
+#endif
+    //// move down
+/*
+#ifdef USE_MULTI_TRAJ
+    goal.trajectory = traj_down;
+#else
+    goal.trajectory = traj;
+#endif
+    ac.sendGoal(goal);
+
+
+    //wait for the action to return
+    finished_before_timeout = ac.waitForResult(ros::Duration(20.0));
+*/
+
+
+
+    if(!wait4enterkey("PRESS ENTER KEY TO EXECUTE MOVEMENT TO OBJECT.")) {cout << "YOU HIT A RANDOM KEY -> EXITING PROGRAM."; return 1;}
+    
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(desired_IK_low)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(desired_IK_low)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(desired_IK_low)); ros::spinOnce(); sleep(1.0);
+
+
+
+
+
+    //// Gripper close: begin
+#ifdef USE_GRIPPER2
+  gripper_pub_pos.publish(rpg_youbot_common::generateGripperPositionMsg(0.000,0.000));
+  sleep(3);
+#endif
+
+#ifdef USE_GRIPPER
+    sleep(2); // in seconds
+
+    gripper_position = 0.00; // in meters - max val: 0.022 - min val: 0.0
+    gripperJointPositions[0].value = gripper_position/2;
+    gripperJointPositions[1].value = gripper_position/2;
+
+    command.positions = gripperJointPositions;
+    gripper_pub_pos.publish(command);
+
+    sleep(3); // in seconds
+
+#endif
+    //// Gripper close: end
+    
+/*
+    //// move up
+#ifdef USE_MULTI_TRAJ
+    goal.trajectory = traj_up;
+    ac.sendGoal(goal);
+#endif
+
+
+    //wait for the action to return
+    finished_before_timeout = ac.waitForResult(ros::Duration(20.0));
+*/
+
+    if(!wait4enterkey("PRESS ENTER KEY TO EXECUTE MOVEMENT TO OBJECT.")) {cout << "YOU HIT A RANDOM KEY -> EXITING PROGRAM."; return 1;}
+    
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(desired_IK)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(desired_IK)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(desired_IK)); ros::spinOnce(); sleep(1.0);
+
+
+    if(!wait4enterkey("PRESS ENTER KEY TO EXECUTE MOVEMENT TO STRAIGHT.")) {cout << "YOU HIT A RANDOM KEY -> EXITING PROGRAM." << endl; return 1;}
+
+    //// executing movement to straight: begin   
+    cout << "Publishing PTP command" << endl;
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(straight_joints)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(straight_joints)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(straight_joints)); ros::spinOnce(); sleep(1.0);
+    //// executing movement to straight: end
+
+    if(!wait4enterkey("PRESS ENTER KEY TO EXECUTE MOVEMENT TO PLATE.")) {cout << "YOU HIT A RANDOM KEY -> EXITING PROGRAM." << endl; return 1;}
+
+    //// executing movement to plate: begin
+   
+    cout << "Publishing PTP command" << endl;
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(plate_joints)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(plate_joints)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(plate_joints)); ros::spinOnce(); sleep(1.0);
+    //// executing movement to plate: end
+
+    if(!wait4enterkey("PRESS ENTER KEY TO OPEN GRIPPER.")) {cout << "YOU HIT A RANDOM KEY -> EXITING PROGRAM." << endl; return 1;}
+
+    //// Gripper open: begin
+#ifdef USE_GRIPPER2
+  gripper_pub_pos.publish(rpg_youbot_common::generateGripperPositionMsg(0.011,0.011));
+  sleep(3);
+#endif
+
+#ifdef USE_GRIPPER
+    //// Gripper open
+
+    gripper_position = 0.022; // in meters - max val: 0.022 - min val: 0.0
+    gripperJointPositions[0].value = gripper_position/2;
+    gripperJointPositions[1].value = gripper_position/2;
+
+    command.positions = gripperJointPositions;
+    gripper_pub_pos.publish(command);
+
+    sleep(3); // in seconds
+
+#endif
+    //// Gripper open: end
+
+    if(!wait4enterkey("PRESS ENTER KEY TO EXECUTE MOVEMENT TO HOME.")) {cout << "YOU HIT A RANDOM KEY -> EXITING PROGRAM." << endl; return 1;}
+
+    //// executing movement to home: begin
+
+    //// executing movement to straight: begin   
+    cout << "Publishing PTP command" << endl;
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(straight_joints)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(straight_joints)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(straight_joints)); ros::spinOnce(); sleep(1.0);
+    //// executing movement to straight: end
+
+   
+    //// executing movement to home: begin   
+    cout << "Publishing PTP command" << endl;
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(home_joints)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(home_joints)); ros::spinOnce(); sleep(0.5);
+    arm_pub_pos.publish(rpg_youbot_common::generateJointPositionMsg(home_joints)); ros::spinOnce(); sleep(1.0);
+    //// executing movement to home: end
+
+
+
+    //// Gripper open: begin
+#ifdef USE_GRIPPER2
+  gripper_pub_pos.publish(rpg_youbot_common::generateGripperPositionMsg(0.00,0.00));
+  sleep(3);
+#endif
+
+#ifdef USE_GRIPPER
+
+    gripper_position = 0.00; // in meters - max val: 0.022 - min val: 0.0
+    gripperJointPositions[0].value = gripper_position/2;
+    gripperJointPositions[1].value = gripper_position/2;
+
+    command.positions = gripperJointPositions;
+    gripper_pub_pos.publish(command);
+
+    sleep(3); // in seconds
+
+#endif
+    //// Gripper open: end
+  return 0;
+
+    if (finished_before_timeout)
+    {
+      actionlib::SimpleClientGoalState state = ac.getState();
+      ROS_INFO("Movement finished: %s", state.toString().c_str());
+    }
+    else
+    {
+      ROS_INFO("Movement did not finish before timeout.");
+    }
+  }
+
+  return 0;
+}
+

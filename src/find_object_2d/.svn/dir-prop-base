@@ -1,0 +1,17 @@
+K 13
+svn:externals
+V 246
+src_x -r 422 https://find-object.googlecode.com/svn/trunk/find_object/src
+include_x -r 422 https://find-object.googlecode.com/svn/trunk/find_object/include
+Version.h.in -r 422 https://find-object.googlecode.com/svn/trunk/find_object/Version.h.in
+
+K 10
+svn:ignore
+V 16
+build
+
+bin
+
+lib
+
+END

@@ -1,0 +1,65 @@
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/svn/!svn/ver/420/trunk/find_object/include/find_object
+END
+FindObjectExp.h
+K 25
+svn:wc:ra_dav:version-url
+V 71
+/svn/!svn/ver/383/trunk/find_object/include/find_object/FindObjectExp.h
+END
+JsonWriter.h
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/svn/!svn/ver/390/trunk/find_object/include/find_object/JsonWriter.h
+END
+FindObject.h
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/svn/!svn/ver/420/trunk/find_object/include/find_object/FindObject.h
+END
+Camera.h
+K 25
+svn:wc:ra_dav:version-url
+V 64
+/svn/!svn/ver/383/trunk/find_object/include/find_object/Camera.h
+END
+DetectionInfo.h
+K 25
+svn:wc:ra_dav:version-url
+V 71
+/svn/!svn/ver/385/trunk/find_object/include/find_object/DetectionInfo.h
+END
+MainWindow.h
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/svn/!svn/ver/420/trunk/find_object/include/find_object/MainWindow.h
+END
+TcpServer.h
+K 25
+svn:wc:ra_dav:version-url
+V 67
+/svn/!svn/ver/420/trunk/find_object/include/find_object/TcpServer.h
+END
+ObjWidget.h
+K 25
+svn:wc:ra_dav:version-url
+V 67
+/svn/!svn/ver/383/trunk/find_object/include/find_object/ObjWidget.h
+END
+QtOpenCV.h
+K 25
+svn:wc:ra_dav:version-url
+V 66
+/svn/!svn/ver/383/trunk/find_object/include/find_object/QtOpenCV.h
+END
+Settings.h
+K 25
+svn:wc:ra_dav:version-url
+V 66
+/svn/!svn/ver/413/trunk/find_object/include/find_object/Settings.h
+END

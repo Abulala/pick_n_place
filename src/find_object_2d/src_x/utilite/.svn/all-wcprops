@@ -1,0 +1,65 @@
+K 25
+svn:wc:ra_dav:version-url
+V 47
+/svn/!svn/ver/369/trunk/find_object/src/utilite
+END
+UDirectory.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/svn/!svn/ver/211/trunk/find_object/src/utilite/UDirectory.cpp
+END
+UFile.h
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/svn/!svn/ver/357/trunk/find_object/src/utilite/UFile.h
+END
+UConversion.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 63
+/svn/!svn/ver/238/trunk/find_object/src/utilite/UConversion.cpp
+END
+UStl.h
+K 25
+svn:wc:ra_dav:version-url
+V 54
+/svn/!svn/ver/357/trunk/find_object/src/utilite/UStl.h
+END
+UDirectory.h
+K 25
+svn:wc:ra_dav:version-url
+V 60
+/svn/!svn/ver/357/trunk/find_object/src/utilite/UDirectory.h
+END
+UConversion.h
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/svn/!svn/ver/357/trunk/find_object/src/utilite/UConversion.h
+END
+UPlot.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/svn/!svn/ver/347/trunk/find_object/src/utilite/UPlot.cpp
+END
+UFile.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 57
+/svn/!svn/ver/110/trunk/find_object/src/utilite/UFile.cpp
+END
+ULogger.cpp
+K 25
+svn:wc:ra_dav:version-url
+V 59
+/svn/!svn/ver/369/trunk/find_object/src/utilite/ULogger.cpp
+END
+UPlot.h
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/svn/!svn/ver/357/trunk/find_object/src/utilite/UPlot.h
+END
